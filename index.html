@@ -195,6 +195,14 @@
   .link.off .dot{background:var(--pink);box-shadow:0 0 10px var(--pink)}
   .stag{font-size:11px;letter-spacing:.18em;color:var(--pink);border:1px solid var(--pink);border-radius:10px;padding:1px 7px}
 
+  .dc{display:grid;grid-template-columns:1fr auto 64px;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px dashed rgba(63,109,255,.18)}
+  .dc .n{font-size:17px;font-weight:600}
+  .dc .c{font-family:'Orbitron';font-size:26px;font-weight:700;text-align:right;text-shadow:0 0 10px rgba(63,109,255,.6)}
+  .dc .d{font-size:14px;text-align:right;color:var(--dim)}
+  .dc .d.down{color:var(--ice)} .dc .d.up{color:#5dffb0}
+  .dc.zero .c,.dc.zero .n{color:var(--pink);text-shadow:0 0 10px rgba(250,125,225,.6)}
+  .dc-warn{color:var(--pink);font-size:15px;padding:8px 0;letter-spacing:.04em}
+
   /* on the clock */
   .who-on{display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px dashed rgba(63,109,255,.18)}
   .who-on .av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-family:'Orbitron';font-size:14px;font-weight:700;
@@ -305,9 +313,9 @@
         <div class="ph"><h2>ON THE CLOCK</h2><span class="badge ok" id="onCount">—</span></div>
         <div class="scroll" id="onClock"></div>
       </div>
-      <div class="panel" style="flex:1">
-        <div class="ph"><h2>STOCK COUNT</h2><span class="stag">SAMPLE</span><span class="meta" id="stockMeta"></span></div>
-        <div class="scroll" id="stock"></div>
+      <div class="panel" id="dailyPanel" style="flex:1">
+        <div class="ph"><h2>DAILY COUNTS</h2><span class="meta" id="dailyMeta"></span></div>
+        <div class="scroll" id="daily"></div>
       </div>
       <div class="panel">
         <div class="ph"><h2>MESSAGE THE SHOP</h2><span class="meta">PREVIEW</span></div>
@@ -344,6 +352,7 @@ const LIVE = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(CONF
 const DATA = {
   alerts: [],          // open alerts only: {row, time, type, details, staff}
   schedule: undefined, // shifts from the schedule sheet: {date, name, start, end}
+  daily: undefined,    // {items:[{key,label}], nights:[{date, counts, initials}]}
   alertsWeek: [0,0,0,0,0,0,0],
   opening: { done:14, total:14, time:"6:42 AM", initials:"MR", missed:[] },
   closing: { done:17, total:18, time:"9:18 PM", initials:"JT", missed:["Mop behind the bar"] },
@@ -498,6 +507,8 @@ async function refresh(fromPin){
   lastSync = Date.now();
   setLink(true, 'SHOP LINK ONLINE · SYNCED JUST NOW');
   DATA.schedule = r.schedule;
+  DATA.daily = r.daily;
+  renderDaily();
   applyAlerts(r.alerts || []);
   renderClock();
   return true;
@@ -576,6 +587,42 @@ async function handled(row, btn){
   setTimeout(() => { DATA.alerts = DATA.alerts.filter(x => x.row !== row); renderAlerts(); }, 450);
 }
 
+
+
+/* ---------- daily counts (entered at closing) ---------- */
+function renderDaily(){
+  const box = $('daily'), meta = $('dailyMeta');
+  const d = DATA.daily;
+  if (d === undefined){ box.innerHTML = '<div class="clk-empty">Loading…</div>'; meta.textContent=''; return; }
+  if (d === null){ box.innerHTML = '<div class="clk-empty">Can’t read the inventory sheet</div>'; meta.textContent=''; return; }
+  const nights = d.nights || [];
+  if (!nights.length){
+    meta.textContent = '';
+    box.innerHTML = '<div class="clk-empty">No counts yet. They’ll show up after the first closing.</div>';
+    $('dailyPanel').classList.remove('hot'); return;
+  }
+  const last = nights[nights.length-1], prev = nights.length > 1 ? nights[nights.length-2] : null;
+  const now = new Date(), today = ymd(now), y = new Date(now); y.setDate(y.getDate()-1);
+  const fresh = last.date === today || last.date === ymd(y);
+  const when = last.date === today ? 'TONIGHT' : last.date === ymd(y) ? 'LAST NIGHT'
+    : new Date(last.date + 'T12:00:00').toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}).toUpperCase();
+  meta.textContent = when;
+  $('dailyPanel').classList.toggle('hot', !fresh);
+  let h = fresh ? '' : '<div class="dc-warn">✕ No counts entered last night</div>';
+  h += d.items.map(it => {
+    const v = last.counts[it.key], pv = prev ? prev.counts[it.key] : null;
+    let diff = '';
+    if (v != null && pv != null && v !== pv){
+      const ch = Math.round((v - pv)*100)/100;
+      diff = `<span class="d ${ch < 0 ? 'down' : 'up'}">${ch < 0 ? '▼' : '▲'} ${Math.abs(ch)}</span>`;
+    } else if (pv != null) diff = '<span class="d">same</span>';
+    else diff = '<span class="d"></span>';
+    return `<div class="dc ${v === 0 ? 'zero' : ''}"><span class="n">${esc(it.label)}</span>
+      <span class="c">${v == null ? '–' : v}</span>${diff}</div>`;
+  }).join('');
+  if (prev) h += `<div class="clk-sub" style="margin-top:8px">▲▼ COMPARED WITH THE NIGHT BEFORE</div>`;
+  box.innerHTML = h;
+}
 
 /* ---------- on the clock (from the weekly schedule) ---------- */
 function onClockCount(){
@@ -693,8 +740,6 @@ function list(el, items){
     </div>`).join('');
 }
 function renderLists(){
-  list('stock', DATA.stock.items);
-  $('stockMeta').textContent = DATA.stock.counted.toUpperCase() + ' · ' + DATA.stock.by.toUpperCase();
 }
 
 /* ---------- center core ---------- */
@@ -702,7 +747,8 @@ function arc(r, frac){ const c = 2*Math.PI*r; return `stroke-dasharray="${c*frac
 function drawCore(){
   const o = DATA.opening, cl = DATA.closing;
   const open = DATA.alerts.length;
-  const outs = [...DATA.stock.items].filter(i=>i.count===0).length;
+  const lastN = DATA.daily && DATA.daily.nights && DATA.daily.nights.length ? DATA.daily.nights[DATA.daily.nights.length-1] : null;
+  const outs = lastN ? Object.values(lastN.counts).filter(v => v === 0).length : 0;
   const P = 'var(--pink)', G = 'var(--glow)';
   const ticks = Array.from({length:72},(_,i)=>{
     const a = i*5*Math.PI/180, r1 = i%6===0?166:171, r2=178;
@@ -766,7 +812,7 @@ function renderTicker(){
 }
 
 /* ---------- start ---------- */
-renderShifts(); renderLists(); renderAlerts(); renderBars(); renderTicker(); renderClock();
+renderShifts(); renderAlerts(); renderBars(); renderTicker(); renderClock(); renderDaily();
 const boot = $('boot');
 setTimeout(() => boot.classList.add('done'), 1900);
 boot.addEventListener('click', () => boot.classList.add('done'));
@@ -785,6 +831,10 @@ if (LIVE){
       { date:t, name:'Hellen', start:f(h-3), end:f(h+2) }, { date:t, name:'Daniel', start:f(h-1), end:f(h+4) },
       { date:t, name:'Needed', start:f(h), end:f(h+1) }, { date:t, name:'Allison', start:f(h+1), end:f(h+5) },
       { date:'2099-01-01', name:'Needed', start:'2:00 PM', end:'5:00 PM' }];
+    const yd = new Date(); yd.setDate(yd.getDate()-1); const y2 = new Date(); y2.setDate(y2.getDate()-2);
+    DATA.daily = { items:[{key:'beans',label:'Coffee beans (bags)'},{key:'matcha',label:'Matcha (bags)'},{key:'water',label:'Water (jugs)'}],
+      nights:[{date:ymd(y2),counts:{beans:6,matcha:3,water:8}},{date:ymd(yd),counts:{beans:4,matcha:3,water:5}}] };
+    renderDaily();
     applyAlerts(SAMPLE_ALERTS.map(a => Object.assign({status:'Open'}, a))); renderClock();
   }, 2000);
 }
