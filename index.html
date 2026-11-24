@@ -206,6 +206,11 @@
   .dc.zero .c,.dc.zero .n{color:var(--pink);text-shadow:0 0 10px rgba(250,125,225,.6)}
   .dc-warn{color:var(--pink);font-size:15px;padding:8px 0;letter-spacing:.04em}
 
+  .sent .m{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px dashed rgba(63,109,255,.18)}
+  .sent .m .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--white)}
+  .sent .m .st{font-size:12px;letter-spacing:.08em;white-space:nowrap}
+  .sent .m .st.wait{color:var(--pink)} .sent .m .st.seen{color:#5dffb0} .sent .m .st.gone{color:var(--dim)}
+  .sent .m button{min-height:30px;padding:2px 9px;font-size:12px;border-color:var(--pink);background:rgba(250,125,225,.12)}
   /* on the clock */
   .who-on{display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px dashed rgba(63,109,255,.18)}
   .who-on .av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-family:'Orbitron';font-size:14px;font-weight:700;
@@ -320,13 +325,13 @@
         <div class="ph"><h2>DAILY COUNTS</h2><span class="meta" id="dailyMeta"></span></div>
         <div class="scroll" id="daily"></div>
       </div>
-      <div class="panel">
-        <div class="ph"><h2>MESSAGE THE SHOP</h2><span class="meta">PREVIEW</span></div>
+      <div class="panel" style="max-height:30vh">
+        <div class="ph"><h2>MESSAGE THE SHOP</h2><span class="meta" id="msgMeta"></span></div>
         <form class="msg" id="msgForm">
-          <input id="msgIn" maxlength="120" placeholder="e.g. Catering pickup at 2pm ✨" aria-label="Message to the shop">
-          <button type="submit">SEND</button>
+          <input id="msgIn" maxlength="300" placeholder="e.g. Catering pickup at 2pm ✨" aria-label="Message to the shop">
+          <button type="submit" id="msgSend">SEND</button>
         </form>
-        <div class="sent" id="sent"></div>
+        <div class="sent scroll" id="sent"></div>
       </div>
     </section>
   </main>
@@ -355,6 +360,7 @@ const LIVE = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(CONF
 const DATA = {
   alerts: [],          // open alerts only: {row, time, type, details, staff}
   schedule: undefined, // shifts from the schedule sheet: {date, name, start, end}
+  messages: undefined, // owner -> shop messages, newest first
   daily: undefined,    // {items:[{key,label}], nights:[{date, counts, initials}]}
   alertsWeek: [0,0,0,0,0,0,0],
   opening: { label:"TODAY", done:0, total:15, lastTime:"", initials:[], missed:[], started:false, loading:true },
@@ -515,6 +521,7 @@ async function refresh(fromPin){
   if (r.checklists){ DATA.opening = r.checklists.opening; DATA.closing = r.checklists.closing; }
   else { DATA.opening = Object.assign({}, DATA.opening, {loading:false, error:true}); DATA.closing = Object.assign({}, DATA.closing, {loading:false, error:true}); }
   renderShifts(); drawCore();
+  DATA.messages = r.messages; renderMessages();
   applyAlerts(r.alerts || []);
   renderClock();
   return true;
@@ -810,13 +817,54 @@ function drawCore(){
     ${nodes}`;
 }
 
-/* ---------- message the shop (preview only, not built yet) ---------- */
-$('msgForm').addEventListener('submit', e => {
+/* ---------- message the shop ---------- */
+// messages: newest first, {id, sent, text, status: Open|Seen|Removed, initials, seenAt}
+function renderMessages(){
+  const list = DATA.messages, box = $('sent');
+  if (list === undefined){ box.innerHTML = ''; return; }
+  if (list === null){ box.innerHTML = '<div class="m"><span class="t" style="color:var(--pink)">Can’t read messages</span></div>'; return; }
+  const waiting = list.filter(m => m.status === 'Open').length;
+  $('msgMeta').textContent = waiting ? waiting + ' WAITING' : '';
+  box.innerHTML = list.slice(0, 6).map(m => {
+    let st;
+    if (m.status === 'Seen') st = `<span class="st seen">✓ ${esc(m.initials)} · ${esc(clockShort(m.seenAt))}</span>`;
+    else if (m.status === 'Removed') st = '<span class="st gone">REMOVED</span>';
+    else st = `<span class="st wait">WAITING</span><button type="button" data-rm="${esc(m.id)}" aria-label="Remove message">✕</button>`;
+    return `<div class="m"><span class="t" title="${esc(m.text)}">${esc(m.text)}</span>${st}</div>`;
+  }).join('') || '<div class="m"><span class="t" style="color:var(--dim)">No messages yet</span></div>';
+}
+function clockShort(iso){
+  const t = new Date(iso); if (isNaN(t)) return '';
+  const today = ymd(new Date()) === ymd(t);
+  return today ? t.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
+               : t.toLocaleString([], {weekday:'short', hour:'numeric', minute:'2-digit'});
+}
+$('msgForm').addEventListener('submit', async e => {
   e.preventDefault();
   const v = $('msgIn').value.trim(); if (!v) return;
-  const t = new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
-  $('sent').insertAdjacentHTML('afterbegin', `<div>▸ ${esc(v)} <em>${t} · PREVIEW, NOT SENT</em></div>`);
-  $('msgIn').value = '';
+  if (!LIVE){
+    DATA.messages = [{id:String(Date.now()), sent:new Date().toISOString(), text:v, status:'Open'}].concat(DATA.messages || []);
+    $('msgIn').value = ''; renderMessages(); toast('Preview only: not sent'); return;
+  }
+  $('msgSend').disabled = true; $('msgSend').textContent = '…';
+  try {
+    const r = await api({ action:'sendmsg', text: v });
+    if (!r.ok){ toast(r.message || 'Could not send'); if (r.error === 'bad_pin'){ memPin=''; store.del('doblexo_owner_pin'); showPin('Please enter your owner PIN'); } return; }
+    $('msgIn').value = '';
+    DATA.messages = r.messages; renderMessages();
+    toast('Sent to the shop ✓');
+  } catch(err){ toast('Can’t reach the shop — not sent'); }
+  finally { $('msgSend').disabled = false; $('msgSend').textContent = 'SEND'; }
+});
+$('sent').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-rm]'); if (!b) return;
+  b.disabled = true;
+  if (!LIVE){ DATA.messages = DATA.messages.map(m => m.id === b.dataset.rm ? Object.assign({}, m, {status:'Removed'}) : m); renderMessages(); return; }
+  try {
+    const r = await api({ action:'removemsg', id: b.dataset.rm });
+    if (!r.ok){ toast(r.message || 'Could not remove'); b.disabled = false; return; }
+    DATA.messages = r.messages; renderMessages();
+  } catch(err){ toast('Can’t reach the shop — try again'); b.disabled = false; }
 });
 
 /* ---------- ticker ---------- */
@@ -852,6 +900,9 @@ if (LIVE){
     DATA.opening = { label:'TODAY', done:15, total:15, lastTime:'6:52 AM', initials:[], missed:[], started:true };
     DATA.closing = { label:'LAST NIGHT', done:12, total:13, lastTime:'4:53 PM', initials:['AH','JE','HF'], missed:['Clean espresso machine'], started:true };
     renderShifts(); drawCore();
+    DATA.messages = [{id:'2',sent:new Date().toISOString(),text:'New lavender syrup recipe is live!',status:'Open'},
+      {id:'1',sent:new Date(Date.now()-3*3600e3).toISOString(),text:'Catering pickup at 2pm, 3 dozen cold brews',status:'Seen',initials:'JE',seenAt:new Date(Date.now()-2.5*3600e3).toISOString()}];
+    renderMessages();
     applyAlerts(SAMPLE_ALERTS.map(a => Object.assign({status:'Open'}, a))); renderClock();
   }, 2000);
 }
