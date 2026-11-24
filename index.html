@@ -120,7 +120,10 @@
   .shifts{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .shift .big{font-family:'Orbitron';font-size:26px;font-weight:700;margin:2px 0}
   .shift .sub{font-size:15px;color:var(--ice)}
-  .shift .miss{font-size:15px;color:var(--pink);margin-top:4px}
+  .shift .big{font-size:22px;letter-spacing:.06em}
+  .shift .miss{font-size:15px;color:var(--pink);margin-top:4px;overflow:auto;min-height:0;line-height:1.35}
+  .shift .miss div{padding:1px 0}
+  .shift .ok-line{color:var(--ice)}
 
   /* lists */
   .row{display:grid;grid-template-columns:1fr 46px 90px;align-items:center;gap:10px;
@@ -297,11 +300,11 @@
       </div>
       <div class="shifts">
         <div class="panel shift" id="openPanel">
-          <div class="ph"><h2>OPENING</h2><span class="stag">SAMPLE</span><span class="meta">TODAY</span></div>
+          <div class="ph"><h2>OPENING</h2><span class="meta" id="openWhen">TODAY</span></div>
           <div class="big" id="openBig"></div><div class="sub" id="openSub"></div><div class="miss" id="openMiss"></div>
         </div>
         <div class="panel shift" id="closePanel">
-          <div class="ph"><h2>CLOSING</h2><span class="stag">SAMPLE</span><span class="meta">LAST NIGHT</span></div>
+          <div class="ph"><h2>CLOSING</h2><span class="meta" id="closeWhen">LAST NIGHT</span></div>
           <div class="big" id="closeBig"></div><div class="sub" id="closeSub"></div><div class="miss" id="closeMiss"></div>
         </div>
       </div>
@@ -354,8 +357,8 @@ const DATA = {
   schedule: undefined, // shifts from the schedule sheet: {date, name, start, end}
   daily: undefined,    // {items:[{key,label}], nights:[{date, counts, initials}]}
   alertsWeek: [0,0,0,0,0,0,0],
-  opening: { done:14, total:14, time:"6:42 AM", initials:"MR", missed:[] },
-  closing: { done:17, total:18, time:"9:18 PM", initials:"JT", missed:["Mop behind the bar"] },
+  opening: { label:"TODAY", done:0, total:15, lastTime:"", initials:[], missed:[], started:false, loading:true },
+  closing: { label:"LAST NIGHT", done:0, total:13, lastTime:"", initials:[], missed:[], started:false, loading:true },
   prep: { updated:"2h ago", items:[
     { name:"Vanilla syrup", count:4 },
     { name:"Brown sugar syrup", count:3 },
@@ -509,6 +512,9 @@ async function refresh(fromPin){
   DATA.schedule = r.schedule;
   DATA.daily = r.daily;
   renderDaily();
+  if (r.checklists){ DATA.opening = r.checklists.opening; DATA.closing = r.checklists.closing; }
+  else { DATA.opening = Object.assign({}, DATA.opening, {loading:false, error:true}); DATA.closing = Object.assign({}, DATA.closing, {loading:false, error:true}); }
+  renderShifts(); drawCore();
   applyAlerts(r.alerts || []);
   renderClock();
   return true;
@@ -720,11 +726,19 @@ function renderBars(){
 
 /* ---------- opening / closing (sample) ---------- */
 function renderShifts(){
-  [['open',DATA.opening],['close',DATA.closing]].forEach(([k,s]) => {
-    const ok = s.done === s.total;
-    $(k+'Big').innerHTML = `<span style="color:${ok?'#fff':'var(--pink)'}">${s.done}/${s.total}</span> ${ok?'<span style="color:var(--glow)">✓</span>':''}`;
-    $(k+'Sub').textContent = `Done ${s.time} · ${s.initials}`;
-    $(k+'Miss').textContent = s.missed.length ? '✕ ' + s.missed.join(', ') : '';
+  [['open',DATA.opening,'openWhen'],['close',DATA.closing,'closeWhen']].forEach(([k,s,w]) => {
+    $(w).textContent = s.label || '';
+    $(k+'Sub').textContent = '';
+    if (s.loading){ $(k+'Big').textContent = '…'; $(k+'Miss').innerHTML = ''; return; }
+    if (s.error){ $(k+'Big').textContent = '—'; $(k+'Miss').innerHTML = '<div class="ok-line">Can’t read the checklist log</div>'; return; }
+    const ok = s.total > 0 && s.done >= s.total;
+    $(k+'Big').innerHTML = ok
+      ? '<span style="color:#fff">COMPLETE</span> <span style="color:var(--glow)">✓</span>'
+      : '<span style="color:var(--pink)">INCOMPLETE</span>';
+    const m = s.missed || [];
+    if (ok && s.lastTime) $(k+'Sub').textContent = 'Completed at ' + s.lastTime;
+    $(k+'Miss').innerHTML = ok ? '' : !s.started ? '<div>✕ Not started yet</div>'
+      : m.map(t => `<div>✕ ${esc(t)}</div>`).join('');
     $(k+'Panel').classList.toggle('hot', !ok);
   });
 }
@@ -782,10 +796,10 @@ function drawCore(){
     <circle cx="200" cy="200" r="158" fill="none" stroke="#3f6dff" stroke-opacity=".5" stroke-width="1" stroke-dasharray="40 10 4 10" class="spin rev"/>
     <circle cx="200" cy="200" r="138" fill="none" stroke="rgba(63,109,255,.15)" stroke-width="10"/>
     <circle cx="200" cy="200" r="138" fill="none" stroke="${o.done<o.total?P:G}" stroke-width="10" stroke-linecap="round"
-      ${arc(138,o.done/o.total)} transform="rotate(-90 200 200)" filter="url(#gl)"/>
+      ${arc(138,o.total ? o.done/o.total : 0)} transform="rotate(-90 200 200)" filter="url(#gl)"/>
     <circle cx="200" cy="200" r="118" fill="none" stroke="rgba(63,109,255,.15)" stroke-width="8"/>
     <circle cx="200" cy="200" r="118" fill="none" stroke="${cl.done<cl.total?P:G}" stroke-width="8" stroke-linecap="round"
-      ${arc(118,cl.done/cl.total)} transform="rotate(-90 200 200)" filter="url(#gl)"/>
+      ${arc(118,cl.total ? cl.done/cl.total : 0)} transform="rotate(-90 200 200)" filter="url(#gl)"/>
     <circle cx="200" cy="200" r="100" fill="none" stroke="#FA7DE1" stroke-opacity=".6" stroke-width="2" stroke-dasharray="2 8" class="spin fast"/>
     <circle cx="200" cy="200" r="86" fill="rgba(2,6,21,.85)" stroke="#3f6dff" stroke-width="1.5"/>
     <text x="200" y="178" text-anchor="middle" font-family="Orbitron" font-size="11" fill="#a9c1ff" letter-spacing="3">SHOP STATUS</text>
@@ -835,6 +849,9 @@ if (LIVE){
     DATA.daily = { items:[{key:'beans',label:'Coffee beans (bags)'},{key:'matcha',label:'Matcha (bags)'},{key:'water',label:'Water (jugs)'}],
       nights:[{date:ymd(y2),counts:{beans:6,matcha:3,water:8}},{date:ymd(yd),counts:{beans:4,matcha:3,water:5}}] };
     renderDaily();
+    DATA.opening = { label:'TODAY', done:15, total:15, lastTime:'6:52 AM', initials:[], missed:[], started:true };
+    DATA.closing = { label:'LAST NIGHT', done:12, total:13, lastTime:'4:53 PM', initials:['AH','JE','HF'], missed:['Clean espresso machine'], started:true };
+    renderShifts(); drawCore();
     applyAlerts(SAMPLE_ALERTS.map(a => Object.assign({status:'Open'}, a))); renderClock();
   }, 2000);
 }
