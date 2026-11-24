@@ -195,6 +195,22 @@
   .link.off .dot{background:var(--pink);box-shadow:0 0 10px var(--pink)}
   .stag{font-size:11px;letter-spacing:.18em;color:var(--pink);border:1px solid var(--pink);border-radius:10px;padding:1px 7px}
 
+  /* on the clock */
+  .who-on{display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px dashed rgba(63,109,255,.18)}
+  .who-on .av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-family:'Orbitron';font-size:14px;font-weight:700;
+    background:rgba(63,109,255,.2);border:1px solid var(--glow);box-shadow:0 0 10px rgba(63,109,255,.4);flex:none}
+  .who-on .nm{font-size:18px;font-weight:700;flex:1}
+  .who-on .till{font-size:14px;color:var(--ice);letter-spacing:.04em}
+  .who-on .bar2{height:4px;border-radius:3px;background:rgba(63,109,255,.15);margin-top:3px;overflow:hidden}
+  .who-on .bar2 i{display:block;height:100%;background:var(--glow)}
+  .who-on.gap .av{border-color:var(--pink);background:rgba(250,125,225,.15);color:var(--pink);box-shadow:0 0 10px rgba(250,125,225,.4)}
+  .who-on.gap .nm{color:var(--pink)}
+  .clk-sub{font-size:13px;letter-spacing:.14em;color:var(--dim);margin:10px 0 2px}
+  .clk-line{font-size:15px;color:var(--ice);padding:2px 0}
+  .clk-line b{color:#fff}
+  .clk-line.need,.clk-line.need b{color:var(--pink)}
+  .clk-empty{color:var(--ice);font-size:16px;padding:10px 0;text-align:center;letter-spacing:.06em}
+
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes blink{50%{opacity:.35}}
   @keyframes grow{from{transform:scaleY(0)}}
@@ -256,13 +272,13 @@
   <main>
     <!-- LEFT -->
     <section class="col">
-      <div class="panel hot" id="alertPanel" style="flex:1">
+      <div class="panel hot" id="alertPanel" style="flex:0.85">
         <div class="ph"><h2>STAFF ALERTS</h2><span class="badge" id="alertCount">0 OPEN</span></div>
         <div class="scroll" id="alerts"></div>
       </div>
-      <div class="panel">
-        <div class="ph"><h2>ALERTS THIS WEEK</h2><span class="meta" id="weekTotal"></span></div>
-        <div class="bars" id="bars"></div>
+      <div class="panel" id="clockPanel" style="flex:1.3">
+        <div class="ph"><h2>ON THE CLOCK</h2><span class="badge ok" id="onCount">—</span></div>
+        <div class="scroll" id="onClock"></div>
       </div>
     </section>
 
@@ -327,6 +343,7 @@ const LIVE = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(CONF
    ========================================================= */
 const DATA = {
   alerts: [],          // open alerts only: {row, time, type, details, staff}
+  schedule: undefined, // shifts from the schedule sheet: {date, name, start, end}
   alertsWeek: [0,0,0,0,0,0,0],
   opening: { done:14, total:14, time:"6:42 AM", initials:"MR", missed:[] },
   closing: { done:17, total:18, time:"9:18 PM", initials:"JT", missed:["Mop behind the bar"] },
@@ -480,7 +497,9 @@ async function refresh(fromPin){
   }
   lastSync = Date.now();
   setLink(true, 'SHOP LINK ONLINE · SYNCED JUST NOW');
+  DATA.schedule = r.schedule;
   applyAlerts(r.alerts || []);
+  renderClock();
   return true;
 }
 
@@ -557,6 +576,72 @@ async function handled(row, btn){
   setTimeout(() => { DATA.alerts = DATA.alerts.filter(x => x.row !== row); renderAlerts(); }, 450);
 }
 
+
+/* ---------- on the clock (from the weekly schedule) ---------- */
+function mins(t){
+  const m = /^(\d{1,2})(?::(\d{2}))?\s*([AP])/i.exec(String(t).trim()); if (!m) return null;
+  let h = Number(m[1]) % 12; if (m[3].toUpperCase() === 'P') h += 12;
+  return h*60 + Number(m[2] || 0);
+}
+function short(t){ const m = mins(t); if (m == null) return t; const h = Math.floor(m/60), mm = m%60;
+  return ((h+11)%12+1) + (mm ? ':' + String(mm).padStart(2,'0') : '') + (h < 12 ? 'A' : 'P'); }
+function ymd(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+const isGap = s => /^needed$/i.test(s.name);
+function renderClock(){
+  const box = $('onClock'), badge = $('onCount');
+  if (DATA.schedule === undefined){ box.innerHTML = '<div class="clk-empty">Loading schedule…</div>'; return; }
+  if (DATA.schedule === null){ badge.textContent = '—'; box.innerHTML = '<div class="clk-empty">Can’t read the schedule sheet</div>'; return; }
+  const now = new Date(), today = ymd(now), nowM = now.getHours()*60 + now.getMinutes();
+  const todays = DATA.schedule.filter(s => s.date === today)
+    .map(s => Object.assign({ a: mins(s.start), b: mins(s.end) }, s)).filter(s => s.a != null && s.b != null)
+    .sort((x,y) => x.a - y.a);
+  if (!DATA.schedule.length || (!todays.length && !DATA.schedule.some(s => s.date > today))){
+    badge.textContent = '—'; badge.className = 'badge';
+    box.innerHTML = '<div class="clk-empty">No schedule for this week yet</div>'; return;
+  }
+  const on = todays.filter(s => s.a <= nowM && nowM < s.b);
+  const staffOn = on.filter(s => !isGap(s)), gapsNow = on.filter(isGap);
+  const next = todays.filter(s => s.a > nowM && !isGap(s));
+  const gapsLater = todays.filter(s => s.a > nowM && isGap(s));
+  badge.textContent = staffOn.length + ' ON';
+  badge.className = 'badge' + (staffOn.length && !gapsNow.length ? ' ok' : '');
+  $('clockPanel').classList.toggle('hot', gapsNow.length > 0);
+
+  let h = '';
+  if (on.length){
+    h += on.map(s => {
+      const pct = Math.min(100, Math.max(0, (nowM - s.a) / (s.b - s.a) * 100));
+      return `<div class="who-on ${isGap(s) ? 'gap' : ''}">
+        <div class="av">${isGap(s) ? '!' : esc(s.name.charAt(0).toUpperCase())}</div>
+        <div style="flex:1"><div style="display:flex;align-items:baseline;gap:8px">
+          <span class="nm">${isGap(s) ? 'Nobody scheduled' : esc(s.name)}</span>
+          <span class="till">${short(s.start)} – ${short(s.end)}</span></div>
+          <div class="bar2"><i style="width:${pct}%"></i></div></div></div>`;
+    }).join('');
+  } else {
+    const later = todays.filter(s => s.a > nowM);
+    h += `<div class="clk-empty">${later.length ? 'Nobody on yet' : 'Shop’s closed for the day ✦'}</div>`;
+  }
+  if (next.length){
+    h += '<div class="clk-sub">COMING UP</div>' + next.slice(0,3).map(s =>
+      `<div class="clk-line"><b>${esc(s.name)}</b> at ${short(s.start)} <span style="color:var(--dim)">(till ${short(s.end)})</span></div>`).join('');
+  }
+  // unfilled shifts later today or in the next 7 days
+  const upcoming = DATA.schedule.filter(s => isGap(s) && (s.date > today));
+  const gapLines = gapsLater.map(s => `Today ${short(s.start)}–${short(s.end)}`)
+    .concat(upcoming.map(s => {
+      const d = new Date(s.date + 'T12:00:00');
+      return d.toLocaleDateString([], {weekday:'short'}) + ' ' + short(s.start) + '–' + short(s.end);
+    }));
+  if (gapLines.length){
+    h += '<div class="clk-sub" style="color:var(--pink)">STILL NEEDS SOMEONE</div>' +
+      gapLines.slice(0,4).map(l => `<div class="clk-line need"><b>✕</b> ${esc(l)}</div>`).join('') +
+      (gapLines.length > 4 ? `<div class="clk-line need">+${gapLines.length-4} more</div>` : '');
+  }
+  box.innerHTML = h;
+}
+setInterval(renderClock, 60000);
+
 /* ---------- clock ---------- */
 function tick(){
   const d = new Date();
@@ -567,6 +652,7 @@ tick(); setInterval(tick, 1000);
 
 /* ---------- week bars ---------- */
 function renderBars(){
+  if (!$('bars')) return;
   const days = ['M','T','W','T','F','S','S'];
   const max = Math.max(...DATA.alertsWeek, 1);
   const today = (new Date().getDay() + 6) % 7;
@@ -676,7 +762,7 @@ function renderTicker(){
 }
 
 /* ---------- start ---------- */
-renderShifts(); renderLists(); renderAlerts(); renderBars(); renderTicker();
+renderShifts(); renderLists(); renderAlerts(); renderBars(); renderTicker(); renderClock();
 const boot = $('boot');
 setTimeout(() => boot.classList.add('done'), 1900);
 boot.addEventListener('click', () => boot.classList.add('done'));
@@ -688,7 +774,15 @@ if (LIVE){
 } else {
   $('previewTag').style.display = '';
   setLink(true, 'PREVIEW · NOT CONNECTED');
-  setTimeout(() => applyAlerts(SAMPLE_ALERTS.map(a => Object.assign({status:'Open'}, a))), 2000);
+  setTimeout(() => {
+    const t = ymd(new Date()), h = new Date().getHours();
+    const f = x => ((x+11)%12+1) + ':00 ' + (x < 12 ? 'AM' : 'PM');
+    DATA.schedule = [
+      { date:t, name:'Hellen', start:f(h-3), end:f(h+2) }, { date:t, name:'Daniel', start:f(h-1), end:f(h+4) },
+      { date:t, name:'Needed', start:f(h), end:f(h+1) }, { date:t, name:'Allison', start:f(h+1), end:f(h+5) },
+      { date:'2099-01-01', name:'Needed', start:'2:00 PM', end:'5:00 PM' }];
+    applyAlerts(SAMPLE_ALERTS.map(a => Object.assign({status:'Open'}, a))); renderClock();
+  }, 2000);
 }
 </script>
 </body>
