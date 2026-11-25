@@ -110,6 +110,22 @@
   .bar.today i{background:linear-gradient(180deg,var(--pink),rgba(250,125,225,.25));box-shadow:0 0 10px rgba(250,125,225,.5)}
   .bar small{font-size:12px;color:var(--dim);letter-spacing:.08em}
 
+  /* sales */
+  .sl{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:2px 10px;padding:5px 0;border-bottom:1px dashed rgba(63,109,255,.18)}
+  .sl .k{font-size:13px;letter-spacing:.14em;color:var(--dim)}
+  .sl .v{font-family:'Orbitron';font-size:20px;font-weight:700;color:#fff;text-align:right}
+  .sl .was{grid-column:1/3;font-size:13px;color:var(--ice);letter-spacing:.04em}
+  .sl .up{color:#5dffb0}.sl .dn{color:var(--pink)}
+  .sbars{display:flex;align-items:flex-end;gap:6px;height:62px;margin-top:8px}
+  .sbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:3px}
+  .sbar .pair{display:flex;align-items:flex-end;gap:2px;width:100%;height:100%;justify-content:center}
+  .sbar .pair i{flex:1;max-width:12px;border-radius:3px 3px 0 0;transform-origin:bottom;animation:grow 1s ease-out both}
+  .sbar .pair i.lw{background:rgba(127,147,201,.35)}
+  .sbar .pair i.tw{background:linear-gradient(180deg,var(--pink),rgba(250,125,225,.25));box-shadow:0 0 8px rgba(250,125,225,.45)}
+  .sbar small{font-size:11px;color:var(--dim);letter-spacing:.08em}
+  .skey{display:flex;gap:12px;justify-content:flex-end;font-size:11px;color:var(--dim);letter-spacing:.08em;margin-top:4px}
+  .skey b{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+
   /* center core */
   .core{flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
   .core svg{width:100%;height:100%;max-height:430px;overflow:visible}
@@ -293,8 +309,8 @@
         <div class="scroll" id="alerts"></div>
       </div>
       <div class="panel">
-        <div class="ph"><h2>ALERTS THIS WEEK</h2><span class="meta" id="weekTotal"></span></div>
-        <div class="bars" id="bars"></div>
+        <div class="ph"><h2>SALES THIS WEEK</h2><span class="meta" id="salesMeta"></span></div>
+        <div id="sales"><div class="clk-empty">Loading…</div></div>
       </div>
     </section>
 
@@ -363,6 +379,7 @@ const DATA = {
   messages: undefined, // owner -> shop messages, newest first
   daily: undefined,    // {items:[{key,label}], nights:[{date, counts, initials}]}
   alertsWeek: [0,0,0,0,0,0,0],
+  sales: undefined,    // daily rows from the Toast emails: {date, guests, net, online}
   opening: { label:"TODAY", done:0, total:15, lastTime:"", initials:[], missed:[], started:false, loading:true },
   closing: { label:"LAST NIGHT", done:0, total:13, lastTime:"", initials:[], missed:[], started:false, loading:true },
   prep: { updated:"2h ago", items:[
@@ -518,6 +535,7 @@ async function refresh(fromPin){
   DATA.schedule = r.schedule;
   DATA.daily = r.daily;
   renderDaily();
+  DATA.sales = r.sales === undefined ? null : r.sales; renderSales();
   if (r.checklists){ DATA.opening = r.checklists.opening; DATA.closing = r.checklists.closing; }
   else { DATA.opening = Object.assign({}, DATA.opening, {loading:false, error:true}); DATA.closing = Object.assign({}, DATA.closing, {loading:false, error:true}); }
   renderShifts(); drawCore();
@@ -549,7 +567,7 @@ function applyAlerts(all){
   DATA.alerts.forEach(a => seen.add(keyOf(a))); saveSeen();
   firstLoad = false;
 
-  renderAlerts(); renderBars(); renderTicker();
+  renderAlerts(); renderTicker();
 }
 
 /* ---------- pop-up ---------- */
@@ -601,6 +619,50 @@ async function handled(row, btn){
 }
 
 
+
+/* ---------- sales this week (from the Toast daily emails) ---------- */
+function renderSales(){
+  const box = $('sales'), meta = $('salesMeta');
+  const rows = DATA.sales;
+  if (rows === undefined){ box.innerHTML = '<div class="clk-empty">Loading…</div>'; meta.textContent=''; return; }
+  if (rows === null){ box.innerHTML = '<div class="clk-empty">Sales not connected yet</div>'; meta.textContent=''; return; }
+  const by = {}; rows.forEach(r => { by[r.date] = r; });
+  const now = new Date(); now.setHours(12,0,0,0);
+  const dow = (now.getDay()+6)%7;                       // 0 = Monday
+  let mon = new Date(now); mon.setDate(mon.getDate()-dow);
+  // Monday morning: no days yet this week, so show last full week vs the week before
+  let full = false;
+  if (dow === 0){ mon.setDate(mon.getDate()-7); full = true; }
+  const lastMon = new Date(mon); lastMon.setDate(lastMon.getDate()-7);
+  const dayOf = (base,i) => { const d = new Date(base); d.setDate(d.getDate()+i); return ymd(d); };
+  const span = full ? 7 : dow;                          // days that are finished
+  const tw = [], lw = [];
+  for (let i=0;i<7;i++){ tw.push(by[dayOf(mon,i)] || null); lw.push(by[dayOf(lastMon,i)] || null); }
+  const sum = (arr,k,n) => arr.slice(0,n).reduce((a,r) => a + (r && r[k] != null && r[k] !== '' ? +r[k] : 0), 0);
+  const have = tw.slice(0,span).filter(Boolean).length;
+  const D = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
+  meta.textContent = full ? 'LAST WEEK vs WEEK BEFORE' : (span === 1 ? 'MON' : 'MON–' + D[span-1]) + ' vs LAST WEEK';
+  if (!have){ box.innerHTML = '<div class="clk-empty">Waiting for this week’s first Toast email (arrives ~8:40 AM)</div>'; return; }
+  const money = v => '$' + Math.round(v).toLocaleString();
+  const line = (label, k, fmt) => {
+    const a = sum(tw,k,span), b = sum(lw,k,span);
+    let ch = '';
+    if (b > 0){ const p = Math.round((a-b)/b*100); ch = `<span class="${p>=0?'up':'dn'}">${p>=0?'▲':'▼'} ${Math.abs(p)}%</span>`; }
+    return `<div class="sl"><span class="k">${label}</span><span class="v">${fmt(a)}</span>
+      <span class="was">last week ${fmt(b)} ${ch}</span></div>`;
+  };
+  let h = line('GROSS SALES','net',money) + line('GUESTS','guests',v => String(Math.round(v))) + line('ONLINE ORDERS','online',money);
+  const max = Math.max(1, ...tw.map(r => r ? +r.net : 0), ...lw.map(r => r ? +r.net : 0));
+  h += '<div class="sbars">' + D.map((d,i) => {
+    const a = tw[i] ? +tw[i].net : 0, b = lw[i] ? +lw[i].net : 0;
+    return `<div class="sbar"><div class="pair">
+      <i class="lw" style="height:${Math.max(b/max*100, b?3:0)}%;animation-delay:${i*.06}s"></i>
+      <i class="tw" style="height:${Math.max(a/max*100, a?3:0)}%;animation-delay:${i*.06}s"></i></div>
+      <small>${d[0]}</small></div>`;
+  }).join('') + '</div>';
+  h += `<div class="skey"><span><b style="background:rgba(127,147,201,.5)"></b>LAST WEEK</span><span><b style="background:var(--pink)"></b>${full?'WEEK':'THIS WEEK'}</span></div>`;
+  box.innerHTML = h;
+}
 
 /* ---------- daily counts (entered at closing) ---------- */
 function renderDaily(){
@@ -874,7 +936,7 @@ function renderTicker(){
 }
 
 /* ---------- start ---------- */
-renderShifts(); renderAlerts(); renderBars(); renderTicker(); renderClock(); renderDaily();
+renderShifts(); renderAlerts(); renderTicker(); renderClock(); renderDaily(); renderSales();
 const boot = $('boot');
 setTimeout(() => boot.classList.add('done'), 1900);
 boot.addEventListener('click', () => boot.classList.add('done'));
@@ -897,6 +959,10 @@ if (LIVE){
     DATA.daily = { items:[{key:'beans',label:'Coffee beans (bags)'},{key:'matcha',label:'Matcha (bags)'},{key:'water',label:'Water (jugs)'}],
       nights:[{date:ymd(y2),counts:{beans:6,matcha:3,water:8}},{date:ymd(yd),counts:{beans:4,matcha:3,water:5}}] };
     renderDaily();
+    { const S = []; const base = new Date(); base.setHours(12,0,0,0);
+      for (let i=1;i<=14;i++){ const d = new Date(base); d.setDate(d.getDate()-i);
+        const n = 520 + ((i*137)%260); S.push({date:ymd(d), guests:Math.round(n/11.9), net:n, online:Math.round(n*.22)}); }
+      DATA.sales = S; renderSales(); }
     DATA.opening = { label:'TODAY', done:15, total:15, lastTime:'6:52 AM', initials:[], missed:[], started:true };
     DATA.closing = { label:'LAST NIGHT', done:12, total:13, lastTime:'4:53 PM', initials:['AH','JE','HF'], missed:['Clean espresso machine'], started:true };
     renderShifts(); drawCore();
